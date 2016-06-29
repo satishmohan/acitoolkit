@@ -3,7 +3,7 @@
 Intersite application enables policies to be applied across multiple ACI fabrics
 For documentation, refer to http://acitoolkit.readthedocs.org/en/latest/intersite.html
 """
-from acitoolkit.acitoolkit import (Tenant, OutsideL3, OutsideEPG, OutsideNetwork,
+from acitoolkit.acitoolkit import (Tenant, OutsideL3, OutsideEPG, OutsideNetwork, EPG, AppProfile,
                                    IPEndpoint, Session, Contract, ContractInterface,
                                    Taboo)
 import json
@@ -654,6 +654,10 @@ class ConfigObject(object):
             if sys.version_info < (3, 0, 0):
                 if isinstance(item, unicode):
                     item = str(item)
+            # Filter out ip addresses of the form address + port number
+            match = re.match('([\d]+\.[\d]+\.[\d]+\.[\d]+):\d+', item)
+            if match:
+                item = match.group(1)
             socket.inet_aton(item)
         except socket.error:
             raise ValueError(self.__class__.__name__ + ': Expected IP address')
@@ -785,19 +789,16 @@ class ConsumedInterfacePolicy(ConfigObject):
         self._validate_non_empty_string(self._policy['cif_name'])
 
 
-class L3OutPolicy(ConfigObject):
+class BaseEpgPolicy(ConfigObject):
     @property
     def name(self):
-        return self._policy['l3out']['name']
+        raise ValueError(self.__class__.__name__ + 'name method not overridden in sub-class')
 
     @property
     def tenant(self):
-        return self._policy['l3out']['tenant']
+        raise ValueError(self.__class__.__name__ + 'tenant method not overridden in sub-class')
 
-    def validate(self):
-        if 'l3out' not in self._policy:
-            raise ValueError('Expecting "l3out" in interface policy')
-        policy = self._policy['l3out']
+    def validate(self, policy):
         for item in policy:
             keyword_validators = {'name': '_validate_non_empty_string',
                                   'tenant': '_validate_non_empty_string',
@@ -814,14 +815,6 @@ class L3OutPolicy(ConfigObject):
             self.get_protected_by_policies()
             self.get_consumes_interface_policies()
 
-    def _get_policies(self, cls, keyword):
-        policies = []
-        if keyword not in self._policy['l3out']:
-            return policies
-        for policy in self._policy['l3out'][keyword]:
-            policies.append(cls(policy))
-        return policies
-
     def get_provided_contract_policies(self):
         return self._get_policies(ProvidedContractPolicy, 'provides')
 
@@ -835,6 +828,54 @@ class L3OutPolicy(ConfigObject):
         return self._get_policies(ConsumedInterfacePolicy, 'consumes_interface')
 
 
+class L3OutPolicy(BaseEpgPolicy):
+    @property
+    def name(self):
+        return self._policy['l3out']['name']
+
+    @property
+    def tenant(self):
+        return self._policy['l3out']['tenant']
+
+    def _get_policies(self, cls, keyword):
+        policies = []
+        if keyword not in self._policy['l3out']:
+            return policies
+        for policy in self._policy['l3out'][keyword]:
+            policies.append(cls(policy))
+        return policies
+
+    def validate(self):
+        if 'l3out' not in self._policy:
+            raise ValueError('Expecting "l3out" in interface policy')
+        policy = self._policy['l3out']
+        super(L3OutPolicy, self).validate(policy)
+
+        
+class EpgPolicy(BaseEpgPolicy):
+    @property
+    def name(self):
+        return self._policy['epg']['name']
+
+    @property
+    def tenant(self):
+        return self._policy['epg']['tenant']
+
+    def _get_policies(self, cls, keyword):
+        policies = []
+        if keyword not in self._policy['epg']:
+            return policies
+        for policy in self._policy['epg'][keyword]:
+            policies.append(cls(policy))
+        return policies
+
+    def validate(self):
+        if 'epg' not in self._policy:
+            raise ValueError('Expecting "epg" in interface policy')
+        policy = self._policy['epg']
+        super(EpgPolicy, self).validate(policy)
+
+        
 class RemoteSitePolicy(ConfigObject):
     @property
     def name(self):
@@ -855,7 +896,10 @@ class RemoteSitePolicy(ConfigObject):
     def get_interfaces(self):
         interfaces = []
         for interface in self._policy['site']['interfaces']:
-            interfaces.append(L3OutPolicy(interface))
+            if 'l3out' in interface:
+                interfaces.append(L3OutPolicy(interface))
+            elif 'epg' in interface:
+                interfaces.append(EpgPolicy(interface))
         return interfaces
 
     def has_interface_policy(self, interface_policy_name):
@@ -866,7 +910,8 @@ class RemoteSitePolicy(ConfigObject):
 
     def remove_interface_policy(self, interface_policy_name):
         for interface_policy in self._policy['site']['interfaces']:
-            if interface_policy['l3out']['name'] == interface_policy_name:
+            if ((interface_policy['l3out']['name'] == interface_policy_name) or
+               (interface_policy['epg']['name'] == interface_policy_name)):
                 self._policy['site']['interfaces'].remove(interface_policy)
 
 
@@ -914,7 +959,7 @@ class ExportPolicy(ConfigObject):
             return False
         return True
 
-    def has_remote_epg(self, remote_site_name, l3out_name, l3instp_name):
+    def has_remote_l3instp(self, remote_site_name, l3out_name, l3instp_name):
         # Check that the Remote EPG is that being used by the policy
         if l3instp_name != self.remote_epg:
             return False
@@ -929,6 +974,27 @@ class ExportPolicy(ConfigObject):
         # Check that the L3Out is being used by the policy
         for interface in site_policy.get_interfaces():
             if interface.name == l3out_name:
+                return True
+        return False
+
+    def has_remote_epg(self, remote_site_name, app_name, epg_name):
+        # Check that the Remote EPG is that being used by the policy
+        if epg_name != self.remote_epg:
+            return False
+        # Check that the Remote App Profile is being used by the policy
+        if app_name != self.app:
+            return False
+        # Check that the Remote Site is being used by the policy
+        site_found = False
+        for site_policy in self.get_site_policies():
+            if site_policy.name == remote_site_name:
+                site_found = True
+                break
+        if not site_found:
+            return False
+        # Check that the epg is being used by the policy
+        for interface in site_policy.get_interfaces():
+            if interface.name == epg_name:
                 return True
         return False
 
@@ -993,7 +1059,7 @@ class ExportPolicy(ConfigObject):
                 return site_policy
         return None
 
-    def remove_l3outs(self, new_policy):
+    def remove_remote_epgs(self, new_policy):
         for new_site_policy in new_policy.get_site_policies():
             if not self.has_site_policy(new_site_policy.name):
                 continue
@@ -1073,35 +1139,56 @@ class LocalSite(Site):
         for site_policy in policy.get_site_policies():
             if site_policy.name not in self.policy_tenant_queue:
                 self.policy_tenant_queue[site_policy.name] = []
-            for l3out_policy in site_policy.get_interfaces():
+                
+            for base_epg_policy in site_policy.get_interfaces():
                 queued_tenant_exists = False
                 for queued_tenant in self.policy_tenant_queue[site_policy.name]:
-                    if queued_tenant.name == l3out_policy.tenant:
+                    if queued_tenant.name == base_epg_policy.tenant:
                         remote_tenant = queued_tenant
                         queued_tenant_exists = True
                         break
                 if not queued_tenant_exists:
-                    remote_tenant = Tenant(l3out_policy.tenant)
+                    remote_tenant = Tenant(base_epg_policy.tenant)
                     self.policy_tenant_queue[site_policy.name].append(remote_tenant)
-                l3out_already_exists = False
-                for existing_l3out in remote_tenant.get_children(only_class=OutsideL3):
-                    if existing_l3out.name == l3out_policy.name:
-                        remote_l3out = existing_l3out
-                        l3out_already_exists = True
-                        break
-                if not l3out_already_exists:
-                    remote_l3out = OutsideL3(l3out_policy.name, remote_tenant)
-                remote_epg = OutsideEPG(policy.remote_epg, remote_l3out)
-                for provided_contract in l3out_policy.get_provided_contract_policies():
+                    
+                if isinstance(base_epg_policy, L3OutPolicy):
+                    l3out_already_exists = False
+                    for existing_l3out in remote_tenant.get_children(only_class=OutsideL3):
+                        if existing_l3out.name == base_epg_policy.name:
+                            remote_l3out = existing_l3out
+                            l3out_already_exists = True
+                            break
+                    if not l3out_already_exists:
+                        remote_l3out = OutsideL3(base_epg_policy.name, remote_tenant)
+                    remote_epg = OutsideEPG(policy.remote_epg, remote_l3out)
+                elif isinstance(base_epg_policy, EpgPolicy):
+                    app_already_exists = False
+                    for existing_app in remote_tenant.get_children(only_class=AppProfile):
+                        if existing_app.name == policy.app:
+                            remote_app = existing_app
+                            app_already_exists = True
+                            break
+                    if not app_already_exists:
+                        remote_app = AppProfile(policy.app, remote_tenant)
+                    epg_already_exists = False
+                    for existing_epg in remote_app.get_children(only_class=EPG):
+                        if existing_epg.name == base_epg_policy.name:
+                            remote_l3out = existing_epg
+                            epg_already_exists = True
+                            break
+                    if not epg_already_exists:
+                        remote_epg = EPG(policy.remote_epg, remote_app)
+                
+                for provided_contract in base_epg_policy.get_provided_contract_policies():
                     contract = Contract(provided_contract.contract_name)
                     remote_epg.provide(contract)
-                for consumed_contract in l3out_policy.get_consumed_contract_policies():
+                for consumed_contract in base_epg_policy.get_consumed_contract_policies():
                     contract = Contract(consumed_contract.contract_name)
                     remote_epg.consume(contract)
-                for protecting_taboo in l3out_policy.get_protected_by_policies():
+                for protecting_taboo in base_epg_policy.get_protected_by_policies():
                     taboo = Taboo(protecting_taboo.taboo_name)
                     remote_epg.protect(taboo)
-                for consumes_interface in l3out_policy.get_consumes_interface_policies():
+                for consumes_interface in base_epg_policy.get_consumes_interface_policies():
                     cif = ContractInterface(consumes_interface.consumes_interface)
                     remote_epg.consume_cif(cif)
                 remote_epg.add_tag(str(tag))
@@ -1147,28 +1234,42 @@ class LocalSite(Site):
         logging.info('')
         if policy in self.policy_db:
             self.policy_db.remove(policy)
+            
         for site_policy in policy.get_site_policies():
             if site_policy.name not in self.policy_tenant_queue:
                 self.policy_tenant_queue[site_policy.name] = []
-            for l3out_policy in site_policy.get_interfaces():
+            for base_epg_policy in site_policy.get_interfaces():
                 queued_tenant_exists = False
                 for queued_tenant in self.policy_tenant_queue[site_policy.name]:
-                    if queued_tenant.name == l3out_policy.tenant:
+                    if queued_tenant.name == base_epg_policy.tenant:
                         remote_tenant = queued_tenant
                         queued_tenant_exists = True
                         break
                 if not queued_tenant_exists:
-                    remote_tenant = Tenant(l3out_policy.tenant)
+                    remote_tenant = Tenant(base_epg_policy.tenant)
                     self.policy_tenant_queue[site_policy.name].append(remote_tenant)
-                l3out_already_exists = False
-                for existing_l3out in remote_tenant.get_children(only_class=OutsideL3):
-                    if existing_l3out.name == l3out_policy.name:
-                        remote_l3out = existing_l3out
-                        l3out_already_exists = True
-                        break
-                if not l3out_already_exists:
-                    remote_l3out = OutsideL3(l3out_policy.name, remote_tenant)
-                remote_epg = OutsideEPG(policy.remote_epg, remote_l3out)
+                
+                if isinstance(base_epg_policy, L3OutPolicy):
+                    l3out_already_exists = False
+                    for existing_l3out in remote_tenant.get_children(only_class=OutsideL3):
+                        if existing_l3out.name == base_epg_policy.name:
+                            remote_l3out = existing_l3out
+                            l3out_already_exists = True
+                            break
+                    if not l3out_already_exists:
+                        remote_l3out = OutsideL3(base_epg_policy.name, remote_tenant)
+                    remote_epg = OutsideEPG(policy.remote_epg, remote_l3out)
+                elif isinstance(base_epg_policy, EPG):
+                    epg_already_exists = False
+                    for existing_epg in remote_tenant.get_children(only_class=EPG):
+                        if existing_epg.name == base_epg_policy.name:
+                            remote_l3out = existing_epg
+                            epg_already_exists = True
+                            break
+                    if not epg_already_exists:
+                        remote_l3out = EPG(base_epg_policy.name, remote_tenant)
+                    remote_epg = EPG(policy.remote_epg, remote_l3out)
+
                 remote_epg.mark_as_deleted()
 
     def get_policy_for_epg(self, tenant_name, app_name, epg_name):
@@ -1191,6 +1292,30 @@ class RemoteSite(Site):
     """
     def __init__(self, name, credentials):
         super(RemoteSite, self).__init__(name, credentials, local=False)
+        
+    def remove_old_l3Instp(self, local_site, tag):
+        l3instp_name = tag['tagInst']['attributes']['dn'].split('/instP-')[1].split('/')[0]
+        dn = tag['tagInst']['attributes']['dn'].split('/instP-')[0]
+        url = '/api/mo/' + dn + '.json'
+        data = {'l3extInstP': {'attributes': {'name': l3instp_name,
+                                              'status': 'deleted'}}}
+        resp = self.session.push_to_apic(url, data)
+        if not resp.ok:
+            logging.error('Could not communicate with remote site to remove old policy')
+            return False
+        return True
+
+    def remove_old_epg(self, local_site, tag):
+        epg_name = tag['tagInst']['attributes']['dn'].split('/epg-')[1].split('/')[0]
+        dn = tag['tagInst']['attributes']['dn']
+        url = '/api/mo/' + dn + '.json'
+        data = {'epg': {'attributes': {'name': epg_name,
+                                       'status': 'deleted'}}}
+        resp = self.session.push_to_apic(url, data)
+        if not resp.ok:
+            logging.error('Could not communicate with remote site to remove old policy')
+            return False
+        return True
 
     def remove_old_policies(self, local_site):
         logging.info('remote_site: %s', self.name)
@@ -1205,18 +1330,18 @@ class RemoteSite(Site):
                 continue
             itag = IntersiteTag.fromstring(tag['tagInst']['attributes']['name'])
             export_policy = local_site.get_policy_for_epg(itag.get_tenant_name(), itag.get_app_name(), itag.get_epg_name())
-            l3out_name = tag['tagInst']['attributes']['dn'].split('/out-')[1].split('/')[0]
-            l3instp_name = tag['tagInst']['attributes']['dn'].split('/instP-')[1].split('/')[0]
-            if export_policy is None or not export_policy.has_remote_epg(self.name, l3out_name, l3instp_name):
-                dn = tag['tagInst']['attributes']['dn'].split('/instP-')[0]
-                url = '/api/mo/' + dn + '.json'
-                data = {'l3extInstP': {'attributes': {'name': l3instp_name,
-                                                      'status': 'deleted'}}}
-                resp = self.session.push_to_apic(url, data)
-                if not resp.ok:
-                    logging.error('Could not communicate with remote site to remove old policy')
-                    return
-                logging.info('Deleted old policy for %s', str(itag))
+            if '/out-' in tag['tagInst']['attributes']['dn']:
+                l3out_name = tag['tagInst']['attributes']['dn'].split('/out-')[1].split('/')[0]
+                l3instp_name = tag['tagInst']['attributes']['dn'].split('/instP-')[1].split('/')[0]
+                if export_policy is None or not export_policy.has_remote_l3instp(self.name, l3out_name, l3instp_name):
+                    if self.remove_old_l3Instp(local_site, tag):
+                        logging.info('Deleted old policy for %s', str(itag))
+            elif '/epg-' in tag['tagInst']['attributes']['dn']:
+                app_name = tag['tagInst']['attributes']['dn'].split('/ap-')[1].split('/')[0]
+                epg_name = tag['tagInst']['attributes']['dn'].split('/epg-')[1].split('/')[0]
+                if export_policy is None or not export_policy.has_remote_epg(self.name, app_name, epg_name):
+                    if self.remove_old_epg(local_site, tag):
+                        logging.info('Deleted old policy for %s', str(itag))
 
 
 class MultisiteCollector(object):
@@ -1456,8 +1581,8 @@ class MultisiteCollector(object):
                     policy_found = True
                     break
             if policy_found:
-                # Handle any old L3Outs that may have been removed
-                old_policy.remove_l3outs(new_policy)
+                # Handle any old L3Outs/EPGs that may have been removed
+                old_policy.remove_remote_epgs(new_policy)
             local_site.remove_policy(old_policy)
         local_site.process_policy_queue()
 
@@ -1869,6 +1994,14 @@ def execute_tool(args, test_mode=False):
                                                     "interfaces": [
                                                         {
                                                             "l3out": {
+                                                                "name": "",
+                                                                "tenant": "",
+                                                                "provides": [{"contract_name": ""}],
+                                                                "consumes": [{"contract_name": ""}],
+                                                                "protected_by": [{"taboo_name": ""}],
+                                                                "consumes_interface": [{"cif_name": ""}]
+                                                            },
+                                                            "epg": {
                                                                 "name": "",
                                                                 "tenant": "",
                                                                 "provides": [{"contract_name": ""}],

@@ -3,8 +3,8 @@
 Intersite application enables policies to be applied across multiple ACI fabrics
 For documentation, refer to http://acitoolkit.readthedocs.org/en/latest/intersite.html
 """
-from acitoolkit.acitoolkit import (Tenant, OutsideL3, OutsideEPG, OutsideNetwork, EPG, AppProfile,
-                                   IPEndpoint, Session, Contract, ContractInterface,
+from acitoolkit.acitoolkit import (Tenant, OutsideL3, OutsideEPG, OutsideNetwork, EPG, AppProfile, SiteAssociated,
+                                   RemoteId, IPEndpoint, Session, Contract, ContractInterface,
                                    Taboo)
 import json
 import re
@@ -119,6 +119,152 @@ class IntersiteTag(object):
         return self._remote_site
 
 
+class EpgHandler(object):
+    """
+    Class responsible for tracking Epg Class Id allocations and sending 
+    them to remote sites.
+    """
+    def __init__(self, my_monitor):
+        self.db = {}  # Indexed by remote site
+        self._monitor = my_monitor
+    
+    def add_epg(self, epg, local_site):
+        """
+        Add an epg to the temporary database to be pushed to the remote sites
+
+        :param epg: Instance of IPepg
+        :param local_site: Instance of LocalSite
+        """
+        app = epg.get_parent()
+        tenant = app.get_parent()
+        logging.info('epg: %s epg: %s app: %s tenant: %s', epg.name, epg.name, app.name, tenant.name)
+
+        # Ignore epgs without pcTag
+        if epg.class_id == '0':
+            return
+
+        # Get the policy for the EPG
+        policy = local_site.get_policy_for_epg(tenant.name, app.name, epg.name)
+        if policy is None:
+            logging.info('Ignoring epg as there is no policy defined for its EPG (epg: %s app: %s tenant: %s)',
+                         epg.name, app.name, tenant.name)
+            return
+
+        logging.info('Need to process epg %s', epg.name)
+        # Process the epg policy
+        for remote_site_policy in policy.get_site_policies():
+            for base_epg_policy in remote_site_policy.get_interfaces():
+                # Process fvAEPg policies only
+                if isinstance(base_epg_policy, L3OutPolicy):
+                    continue
+                    
+                # Remove existing JSON for the epg if any already queued since this
+                # update will override that
+                # self._remove_queued_epg(remote_site_policy.name, base_epg_policy, epg)
+
+                # Create the JSON
+                remote_tenant = Tenant(base_epg_policy.tenant)
+                remote_app = AppProfile(app.name, remote_tenant)
+                remote_epg = EPG(policy.remote_epg, remote_app)
+                remote_site_asc = SiteAssociated(remote_epg)
+                RemoteId(remote_site_asc, local_site.name, epg.class_id)
+                tenant_json = remote_tenant.get_json()
+
+                # Add to the database
+                self._merge_tenant_json(remote_site_policy.name, tenant_json)
+    
+    def _merge_tenant_json(self, remote_site, new_json):
+        """
+        Merge the JSON for the epg with the rest of the endpoints
+        already processed
+
+        :param remote_site: String containing the remote site to push the epg
+        :param new_json: JSON dictionary containing the JSON for the epg
+        """
+        # Add the remote site if the first epg for that site
+        if remote_site not in self.db:
+            self.db[remote_site] = [new_json]
+            return
+
+        # Look for the tenant JSON
+        db_json = self.db[remote_site]
+        tenant_found = False
+        for tenant_json in db_json:
+            if tenant_json['fvTenant']['attributes']['name'] == new_json['fvTenant']['attributes']['name']:
+                tenant_found = True
+                break
+
+        # Add the tenant if the first epg for this tenant
+        if not tenant_found:
+            self.db[remote_site].append(new_json)
+            return
+
+        new_app_profile = new_json['fvTenant']['children'][0]
+        assert 'fvAp' in new_app_profile
+
+        # Find the app profile in the existing JSON
+        app_profile_found = False
+        for app_profile in tenant_json['fvTenant']['children']:
+            if 'fvAp' not in app_profile:
+                continue
+            if app_profile['fvAp']['attributes']['name'] == new_app_profile['fvAp']['attributes']['name']:
+                app_profile_found = True
+                break
+
+        # Add the app_profile JSON if the first epg for this tenant's app_profile
+        if not app_profile_found:
+            tenant_json['fvTenant']['children'].append(new_app_profile)
+            return
+
+        new_epg = new_app_profile['fvAp']['children'][0]
+        assert 'fvAEPg' in new_epg
+
+        # Find the EPG in the existing JSON
+        epg_found = False
+        for epg in app_profile['fvAp']['children']:
+            if 'fvAEPg' not in epg:
+                continue
+            if epg['fvAEPg']['attributes']['name'] == new_epg['fvAEPg']['attributes']['name']:
+                epg_found = True
+                break
+
+        if not epg_found:
+            app_profile['fvAp']['children'].append(new_epg)
+            return
+
+        # Add the epg configuration with the existing JSON
+        new_endpoint = new_epg['fvAEPg']['children'][0]
+        # assert 'l3extSubnet' in new_endpoint
+        # if new_endpoint not in epg['fvAEPg']['children']:
+        #     epg['fvAEPg']['children'].append(new_endpoint)
+            
+    def push_to_remote_sites(self, collector):
+        """
+        Push the endpoints to the remote sites
+        """
+        logging.debug('')
+        for remote_site in self.db:
+            remote_site_obj = collector.get_site(remote_site)
+            assert remote_site_obj is not None
+            remote_session = remote_site_obj.session
+            for tenant_json in self.db[remote_site]:
+                keep_trying = True
+                while keep_trying:
+                    try:
+                        resp = remote_session.push_to_apic(Tenant.get_url(), tenant_json)
+                    except Timeout:
+                        logging.error('Timeout error when attempting configuration push')
+                        return
+                    keep_trying = False
+                    if not resp.ok:
+                        logging.warning('Could not push to remote site: %s %s', resp, resp.text)
+                        if resp.status_code == 400:
+                            keep_trying = self.check_and_remove_duplicate(remote_session,
+                                                                          tenant_json,
+                                                                          resp.json())
+        self.db = {}
+
+    
 class EndpointHandler(object):
     """
     Class responsible for tracking the Endpoints during processing.
@@ -429,6 +575,7 @@ class MultisiteMonitor(threading.Thread):
         self._exit = False
         self._my_collector = my_collector
         self._endpoints = EndpointHandler(self)
+        self._epgs = EpgHandler(self)
 
     def exit(self):
         """
@@ -524,9 +671,17 @@ class MultisiteMonitor(threading.Thread):
             num_eps -= 1
         self._endpoints.push_to_remote_sites(self._my_collector)
 
+    def handle_epg_event(self):
+        while EPG.has_events(self._session):
+            epg = EPG.get_event(self._session)
+            logging.info('for Endpoint: %s', epg.name)
+            self._epgs.add_epg(epg, self._local_site)
+        self._epgs.push_to_remote_sites(self._my_collector)
+
     def run(self):
-        # Subscribe to endpoints
+        # Subscribe to endpoints, EPGs and so on.
         IPEndpoint.subscribe(self._session)
+        EPG.subscribe(self._session)
 
         while not self._exit:
             if IPEndpoint.has_events(self._session):
@@ -534,6 +689,11 @@ class MultisiteMonitor(threading.Thread):
                     self.handle_endpoint_event()
                 except ConnectionError:
                     logging.error('Could not handle endpoint event due to ConnectionError')
+            if EPG.has_events(self._session):
+                try:
+                    self.handle_epg_event()
+                except ConnectionError:
+                    logging.error('Could not handle epg event due to ConnectionError')
 
 
 class SiteLoginCredentials(object):
@@ -802,6 +962,7 @@ class BaseEpgPolicy(ConfigObject):
         for item in policy:
             keyword_validators = {'name': '_validate_non_empty_string',
                                   'tenant': '_validate_non_empty_string',
+                                  'app': '_validate_non_empty_string',
                                   'provides': '_validate_list',
                                   'consumes': '_validate_list',
                                   'protected_by': '_validate_list',
@@ -861,6 +1022,10 @@ class EpgPolicy(BaseEpgPolicy):
     def tenant(self):
         return self._policy['epg']['tenant']
 
+    @property
+    def app(self):
+        return self._policy['epg']['app']
+    
     def _get_policies(self, cls, keyword):
         policies = []
         if keyword not in self._policy['epg']:
@@ -1162,14 +1327,15 @@ class LocalSite(Site):
                         remote_l3out = OutsideL3(base_epg_policy.name, remote_tenant)
                     remote_epg = OutsideEPG(policy.remote_epg, remote_l3out)
                 elif isinstance(base_epg_policy, EpgPolicy):
+                    epg_policy = base_epg_policy
                     app_already_exists = False
                     for existing_app in remote_tenant.get_children(only_class=AppProfile):
-                        if existing_app.name == policy.app:
+                        if existing_app.name == epg_policy.app:
                             remote_app = existing_app
                             app_already_exists = True
                             break
                     if not app_already_exists:
-                        remote_app = AppProfile(policy.app, remote_tenant)
+                        remote_app = AppProfile(epg_policy.app, remote_tenant)
                     epg_already_exists = False
                     for existing_epg in remote_app.get_children(only_class=EPG):
                         if existing_epg.name == base_epg_policy.name:
@@ -2004,6 +2170,7 @@ def execute_tool(args, test_mode=False):
                                                             "epg": {
                                                                 "name": "",
                                                                 "tenant": "",
+                                                                "app": "",
                                                                 "provides": [{"contract_name": ""}],
                                                                 "consumes": [{"contract_name": ""}],
                                                                 "protected_by": [{"taboo_name": ""}],

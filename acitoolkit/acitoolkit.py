@@ -7269,6 +7269,44 @@ class LogicalModel(BaseACIObject):
         return results
 
 
+class SiteAssociated(BaseACIObject):
+    """This class defines a container to store remote class id maps"""
+
+    def __init__(self, parent):
+        super(SiteAssociated, self).__init__(name='SiteAssociated', parent=parent)
+
+    def get_json(self):
+        children = []
+        for entry in self.get_children():
+            if isinstance(entry, RemoteId):
+                rId = entry.get_json()
+                children.append(rId)
+
+        vzSiteAssociated = {'vzSiteAssociated': {'attributes': {}, 'children': children}}
+        return vzSiteAssociated
+
+
+class RemoteId(BaseACIObject):
+    """This class defines a container to store remote class id maps"""
+
+    def __init__(self, parent, remoteSite, remoteClassId):
+        super(RemoteId, self).__init__(name='RemoteId', parent=parent)
+        self.remoteSite = remoteSite
+        self.remoteClassId = remoteClassId
+
+    def get_json(self):
+        vzSiteAssociated = {'vzRemoteId': {
+                                            'attributes': 
+                                                    {
+                                                    'siteId': self.remoteSite,
+                                                    'remotePcTag': self.remoteClassId
+                                                    },
+                                            'children':[]
+                                          }
+                           }
+        return vzSiteAssociated
+
+
 def build_object_dictionary(objs):
     """
     Will build a dictionary indexed by object class that contains all the objects of that class

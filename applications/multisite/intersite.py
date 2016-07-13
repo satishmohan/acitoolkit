@@ -3,8 +3,8 @@
 Intersite application enables policies to be applied across multiple ACI fabrics
 For documentation, refer to http://acitoolkit.readthedocs.org/en/latest/intersite.html
 """
-from acitoolkit.acitoolkit import (Tenant, OutsideL3, OutsideEPG, OutsideNetwork, EPG, AppProfile, SiteAssociated,
-                                   RemoteId, IPEndpoint, Session, Contract, ContractInterface,
+from acitoolkit.acitoolkit import (Tenant, OutsideL3, OutsideEPG, OutsideNetwork, EPG, Context, AppProfile, SiteAssociated,
+                                   RemoteId, BridgeDomain, IPEndpoint, Session, Contract, ContractInterface,
                                    Taboo)
 import json
 import re
@@ -29,7 +29,7 @@ import argparse
 MAX_ENDPOINTS = 500
 
 
-class IntersiteTag(object):
+class IntersiteTagEpg(object):
     """
     This class deals with the tagInst instances stored in the APIC
     Used to re-derive the application state after booting
@@ -118,6 +118,84 @@ class IntersiteTag(object):
         """
         return self._remote_site
 
+class IntersiteTagCtx(object):
+    """
+    This class deals with the tagInst instances stored in the APIC
+    Used to re-derive the application state after booting
+    """
+    def __init__(self, tenant_name, ctx_name, remote_site):
+        """
+        Class instance  initialization
+
+        :param tenant_name: String containing the Tenant name. Used to scope the context.
+        :param ctx_name: String containing the context name.
+        :param remote_site:  String containing the remote site name
+        """
+        self._tenant_name = tenant_name
+        self._ctx_name = ctx_name
+        self._remote_site = remote_site
+
+    @staticmethod
+    def is_intersite_tag(tag):
+        """
+        Indicates whether the tag is an intersite tag
+
+        :param tag: String containing the tag from the APIC
+        :returns: True or False.  True if the tag is considered a
+                  intersite tag. False otherwise.
+        """
+        return re.match(r'isite-c:.*:.*', tag)
+
+    @classmethod
+    def fromstring(cls, tag):
+        """
+        Extract the intersite tag from a string
+
+        :param tag: String containing the intersite tag
+        :returns: New instance of IntersiteTag
+        """
+        if not cls.is_intersite_tag(tag):
+            assert cls.is_intersite_tag(tag)
+            return None
+        tag_data = tag.split(':')
+        tenant_name = tag_data[1]
+        ctx_name = tag_data[2]
+        remote_site_name = tag_data[3]
+        new_tag = cls(tenant_name, ctx_name, remote_site_name)
+        return new_tag
+
+    def __str__(self):
+        """
+        Convert the intersite tag into a string
+
+        :returns: String containing the intersite tag
+        """
+        return 'isite-c:' + self._tenant_name + ':' + self._ctx_name + ':' + self._remote_site
+
+    def get_tenant_name(self):
+        """
+        Get the tenant name
+
+        :returns: string containing the tenant name
+        """
+        return self._tenant_name
+
+    def get_ctx_name(self):
+        """
+        Get the ctx name
+
+        :returns: string containing the ctx name
+        """
+        return self._ctx_name
+
+    def get_remote_site_name(self):
+        """
+        Get the remote site name
+
+        :returns: string containing the remote site name
+        """
+        return self._remote_site
+
 
 class EpgHandler(object):
     """
@@ -132,7 +210,7 @@ class EpgHandler(object):
         """
         Add an epg to the temporary database to be pushed to the remote sites
 
-        :param epg: Instance of IPepg
+        :param epg: Instance of EPG
         :param local_site: Instance of LocalSite
         """
         app = epg.get_parent()
@@ -166,13 +244,16 @@ class EpgHandler(object):
                 remote_tenant = Tenant(base_epg_policy.tenant)
                 remote_app = AppProfile(app.name, remote_tenant)
                 remote_epg = EPG(policy.remote_epg, remote_app)
-                remote_site_asc = SiteAssociated(remote_epg)
+                remote_bd  = BridgeDomain(policy.bd, remote_tenant)
+                remote_epg.add_bd(remote_bd)
+                remote_site_asc = SiteAssociated(remote_epg, remote_site_policy.name)
                 RemoteId(remote_site_asc, local_site.name, epg.class_id)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database
                 self._merge_tenant_json(remote_site_policy.name, tenant_json)
-    
+                
+
     def _merge_tenant_json(self, remote_site, new_json):
         """
         Merge the JSON for the epg with the rest of the endpoints
@@ -232,11 +313,6 @@ class EpgHandler(object):
             app_profile['fvAp']['children'].append(new_epg)
             return
 
-        # Add the epg configuration with the existing JSON
-        new_endpoint = new_epg['fvAEPg']['children'][0]
-        # assert 'l3extSubnet' in new_endpoint
-        # if new_endpoint not in epg['fvAEPg']['children']:
-        #     epg['fvAEPg']['children'].append(new_endpoint)
             
     def push_to_remote_sites(self, collector):
         """
@@ -258,10 +334,115 @@ class EpgHandler(object):
                     keep_trying = False
                     if not resp.ok:
                         logging.warning('Could not push to remote site: %s %s', resp, resp.text)
-                        if resp.status_code == 400:
-                            keep_trying = self.check_and_remove_duplicate(remote_session,
-                                                                          tenant_json,
-                                                                          resp.json())
+        self.db = {}
+
+class ContextHandler(object):
+    """
+    Class responsible for tracking Context Class Id allocations and sending 
+    them to remote sites.
+    """
+    def __init__(self, my_monitor):
+        self.db = {}  # Indexed by remote site
+        self._monitor = my_monitor
+    
+    def add_context(self, context, local_site):
+        """
+        Add an context to the temporary database to be pushed to the remote sites
+
+        :param context: Instance of Context
+        :param local_site: Instance of LocalSite
+        """
+        tenant = context.get_parent()
+        logging.info('context: %s context: %s tenant: %s', context.name, tenant.name)
+
+        # Ignore contexts without vnid allocated
+        if context.class_id == '0':
+            return
+
+        # Get the policy for the context
+        policy = local_site.get_policy_for_context(tenant.name, context.name)
+        if policy is None:
+            logging.info('Ignoring context as there is no policy defined for its context (context: %s tenant: %s)',
+                         context.name, tenant.name)
+            return
+
+        logging.info('Need to process context %s', context.name)
+        # Process the context policy
+        for remote_site_policy in policy.get_site_policies():
+            for context_policy in remote_site_policy.get_interfaces():
+                # Create the JSON
+                remote_tenant = Tenant(context_policy.tenant)
+                remote_ctx = Context(policy.remote_ctx, remote_tenant)
+                remote_site_asc = SiteAssociated(remote_ctx, remote_site_policy.name)
+                RemoteId(remote_site_asc, local_site.name, context.class_id)
+                tenant_json = remote_tenant.get_json()
+
+                # Add to the database
+                self._merge_tenant_json(remote_site_policy.name, tenant_json)
+    
+    def _merge_tenant_json(self, remote_site, new_json):
+        """
+        Merge the JSON for the context with the rest of the contexts
+        already processed
+
+        :param remote_site: String containing the remote site to push the context
+        :param new_json: JSON dictionary containing the JSON for the context
+        """
+        # Add the remote site if the first context for that site
+        if remote_site not in self.db:
+            self.db[remote_site] = [new_json]
+            return
+
+        # Look for the tenant JSON
+        db_json = self.db[remote_site]
+        tenant_found = False
+        for tenant_json in db_json:
+            if tenant_json['fvTenant']['attributes']['name'] == new_json['fvTenant']['attributes']['name']:
+                tenant_found = True
+                break
+
+        # Add the tenant if the first context for this tenant
+        if not tenant_found:
+            self.db[remote_site].append(new_json)
+            return
+
+        new_context = new_json['fvTenant']['children'][0]
+        assert 'fvCtx' in new_context
+
+        # Find the context in the existing JSON
+        context_found = False
+        for context in tenant_json['fvTenant']['children']:
+            if 'fvCtx' not in context:
+                continue
+            if context['fvCtx']['attributes']['name'] == new_context['fvCtx']['attributes']['name']:
+                context_found = True
+                break
+
+        # Add the context JSON if the first context for this tenant's context
+        if not context_found:
+            tenant_json['fvTenant']['children'].append(new_context)
+            return
+            
+    def push_to_remote_sites(self, collector):
+        """
+        Push the endpoints to the remote sites
+        """
+        logging.debug('')
+        for remote_site in self.db:
+            remote_site_obj = collector.get_site(remote_site)
+            assert remote_site_obj is not None
+            remote_session = remote_site_obj.session
+            for tenant_json in self.db[remote_site]:
+                keep_trying = True
+                while keep_trying:
+                    try:
+                        resp = remote_session.push_to_apic(Tenant.get_url(), tenant_json)
+                    except Timeout:
+                        logging.error('Timeout error when attempting configuration push')
+                        return
+                    keep_trying = False
+                    if not resp.ok:
+                        logging.warning('Could not push to remote site: %s %s', resp, resp.text)
         self.db = {}
 
     
@@ -420,7 +601,6 @@ class EndpointHandler(object):
                 self._remove_queued_endpoint(remote_site_policy.name, l3out_policy, endpoint)
 
                 # Create the JSON
-                tag = IntersiteTag(tenant.name, app.name, epg.name, local_site.name)
                 remote_tenant = Tenant(l3out_policy.tenant)
                 remote_l3out = OutsideL3(l3out_policy.name, remote_tenant)
                 remote_epg = OutsideEPG(policy.remote_epg, remote_l3out)
@@ -576,6 +756,7 @@ class MultisiteMonitor(threading.Thread):
         self._my_collector = my_collector
         self._endpoints = EndpointHandler(self)
         self._epgs = EpgHandler(self)
+        self._contexts = ContextHandler(self)
 
     def exit(self):
         """
@@ -590,9 +771,6 @@ class MultisiteMonitor(threading.Thread):
                 logging.error('Could not find remote site %s', site.name)
                 continue
             for l3out in site.get_interfaces():
-                itag = IntersiteTag(export_policy.tenant, export_policy.app, export_policy.epg,
-                                    self._local_site.name)
-
                 # Get the l3extInstP with the tag
                 query_url = ('/api/mo/uni/tn-%s/out-%s/instP-%s.json?query-target=children&'
                              'rsp-subtree=children' % (l3out.tenant, l3out.name, export_policy.remote_epg))
@@ -645,6 +823,9 @@ class MultisiteMonitor(threading.Thread):
                             logging.warning('Could not push modified entry to remote site %s %s', resp, resp.text)
 
     def handle_existing_endpoints(self, policy):
+        if policy.type != 'epg':
+            return
+
         logging.info('for tenant: %s app_name: %s epg_name: %s',
                      policy.tenant, policy.app, policy.epg)
         try:
@@ -674,14 +855,22 @@ class MultisiteMonitor(threading.Thread):
     def handle_epg_event(self):
         while EPG.has_events(self._session):
             epg = EPG.get_event(self._session)
-            logging.info('for Endpoint: %s', epg.name)
+            logging.info('for EPG: %s', epg.name)
             self._epgs.add_epg(epg, self._local_site)
         self._epgs.push_to_remote_sites(self._my_collector)
+
+    def handle_context_event(self):
+        while Context.has_events(self._session):
+            context = Context.get_event(self._session)
+            logging.info('for Context: %s', context.name)
+            self._contexts.add_context(context, self._local_site)
+        self._contexts.push_to_remote_sites(self._my_collector)
 
     def run(self):
         # Subscribe to endpoints, EPGs and so on.
         IPEndpoint.subscribe(self._session)
         EPG.subscribe(self._session)
+        Context.subscribe(self._session)
 
         while not self._exit:
             if IPEndpoint.has_events(self._session):
@@ -692,6 +881,11 @@ class MultisiteMonitor(threading.Thread):
             if EPG.has_events(self._session):
                 try:
                     self.handle_epg_event()
+                except ConnectionError:
+                    logging.error('Could not handle epg event due to ConnectionError')
+            if Context.has_events(self._session):
+                try:
+                    self.handle_context_event()
                 except ConnectionError:
                     logging.error('Could not handle epg event due to ConnectionError')
 
@@ -767,15 +961,31 @@ class IntersiteConfiguration(object):
                 if export_policy is not None:
                     self.export_policies.append(export_policy)
         self._validate_unique_epgs()
+        self._validate_unique_ctxs()
 
     def _validate_unique_epgs(self):
         for policy in self.export_policies:
-            count = 0
-            for other_policy in self.export_policies:
-                if other_policy.has_same_epg(policy):
-                    count += 1
-            if count > 1:
-                raise ValueError('Duplicate EPG export policy found for tenant:%s app:%s epg:%s' % (policy.tenant, policy.app, policy.epg))
+            # Ignore Ctx and BD export policies
+            if policy.type == 'epg':
+                count = 0
+                for other_policy in self.export_policies:
+                    if other_policy.type == 'epg':
+                        if other_policy.has_same_epg(policy):
+                            count += 1
+                if count > 1:
+                    raise ValueError('Duplicate EPG export policy found for tenant:%s app:%s epg:%s' % (policy.tenant, policy.app, policy.epg))
+
+    def _validate_unique_ctxs(self):
+        for policy in self.export_policies:
+            # Ignore BD export policies
+            if policy.type == 'ctx':
+                count = 0
+                for other_policy in self.export_policies:
+                    if other_policy.type == 'ctx':
+                        if other_policy.has_same_ctx(policy):
+                            count += 1
+                if count > 1:
+                    raise ValueError('Duplicate Ctx export policy found for tenant:%s ctx:%s' % (policy.tenant, policy.ctx))
 
     def get_config(self):
         policies = []
@@ -1040,6 +1250,34 @@ class EpgPolicy(BaseEpgPolicy):
         policy = self._policy['epg']
         super(EpgPolicy, self).validate(policy)
 
+class ContextPolicy(ConfigObject):
+    @property
+    def name(self):
+        return self._policy['ctx']['name']
+
+    @property
+    def tenant(self):
+        return self._policy['ctx']['tenant']
+
+    def _get_policies(self, cls, keyword):
+        policies = []
+        if keyword not in self._policy['ctx']:
+            return policies
+        for policy in self._policy['ctx'][keyword]:
+            policies.append(cls(policy))
+        return policies
+
+    def validate(self):
+        if 'ctx' not in self._policy:
+            raise ValueError('Expecting "ctx" in interface policy')
+        policy = self._policy['ctx']
+        for item in policy:
+            keyword_validators = {'name': '_validate_non_empty_string',
+                                  'tenant': '_validate_non_empty_string'
+                                  }
+            if item not in keyword_validators:
+                raise ValueError(self.__class__.__name__ + 'Unknown keyword: %s' % item)
+
         
 class RemoteSitePolicy(ConfigObject):
     @property
@@ -1065,6 +1303,8 @@ class RemoteSitePolicy(ConfigObject):
                 interfaces.append(L3OutPolicy(interface))
             elif 'epg' in interface:
                 interfaces.append(EpgPolicy(interface))
+            elif 'ctx' in interface:
+                interfaces.append(ContextPolicy(interface))
         return interfaces
 
     def has_interface_policy(self, interface_policy_name):
@@ -1094,8 +1334,31 @@ class ExportPolicy(ConfigObject):
         return self._policy['export']['epg']
 
     @property
+    def bd(self):
+        return self._policy['export']['bd']
+
+    @property
+    def ctx(self):
+        return self._policy['export']['ctx']
+
+    @property
     def remote_epg(self):
         return self._policy['export']['remote_epg']
+
+    @property
+    def remote_ctx(self):
+        return self._policy['export']['remote_ctx']
+
+    @property
+    def type(self):
+        if 'epg' in self._policy['export']:
+            return 'epg'
+        elif 'bd' in self._policy['export']:
+            return 'bd'
+        elif 'ctx' in self._policy['export']:
+            return 'ctx'
+        else:
+            return 'unsupported'
 
     def validate(self):
         if 'export' not in self._policy:
@@ -1105,7 +1368,10 @@ class ExportPolicy(ConfigObject):
             keyword_validators = {'tenant': '_validate_string',
                                   'app': '_validate_string',
                                   'epg': '_validate_string',
+                                  'bd': '_validate_string',
+                                  'ctx': '_validate_string',
                                   'remote_epg': '_validate_string',
+                                  'remote_ctx': '_validate_string',
                                   'remote_sites': '_validate_list'}
             if item not in keyword_validators:
                 raise ValueError(self.__class__.__name__ + 'Unknown keyword: %s' % item)
@@ -1115,6 +1381,12 @@ class ExportPolicy(ConfigObject):
     def has_same_epg(self, policy):
         assert isinstance(policy, ExportPolicy)
         if self.tenant != policy.tenant or self.app != policy.app or self.epg != policy.epg:
+            return False
+        return True
+
+    def has_same_ctx(self, policy):
+        assert isinstance(policy, ExportPolicy)
+        if self.tenant != policy.tenant or self.ctx != policy.ctx:
             return False
         return True
 
@@ -1244,13 +1516,15 @@ class LocalSite(Site):
         self.policy_tenant_queue = {}
 
     def start(self):
-        resp = super(LocalSite, self).start()
+        super(LocalSite, self).start()
         self.monitor = MultisiteMonitor(self.session, self, self.my_collector)
         self.monitor.daemon = True
         self.monitor.start()
 
     def remove_stale_entries(self, policy):
         logging.info('')
+        if policy.type != 'epg':
+            return
         # Get all of the local APIC entries
         try:
             endpoints = IPEndpoint.get_all_by_epg(self.session,
@@ -1300,7 +1574,10 @@ class LocalSite(Site):
 
     def push_policy_to_queue(self, policy):
         logging.info('')
-        tag = IntersiteTag(policy.tenant, policy.app, policy.epg, self.name)
+        if policy.type == 'epg':
+            tag = IntersiteTagEpg(policy.tenant, policy.app, policy.epg, self.name)
+        elif policy.type == 'ctx':
+            tag = IntersiteTagCtx(policy.tenant, policy.ctx, self.name)
         for site_policy in policy.get_site_policies():
             if site_policy.name not in self.policy_tenant_queue:
                 self.policy_tenant_queue[site_policy.name] = []
@@ -1339,11 +1616,24 @@ class LocalSite(Site):
                     epg_already_exists = False
                     for existing_epg in remote_app.get_children(only_class=EPG):
                         if existing_epg.name == base_epg_policy.name:
-                            remote_l3out = existing_epg
+                            remote_epg = existing_epg
                             epg_already_exists = True
                             break
                     if not epg_already_exists:
                         remote_epg = EPG(policy.remote_epg, remote_app)
+                elif isinstance(base_epg_policy, ContextPolicy):
+                    context_policy = base_epg_policy
+                    context_already_exists = False
+                    for existing_context in remote_tenant.get_children(only_class=Context):
+                        if existing_context.name == context_policy.name:
+                            remote_ctx = existing_context
+                            context_already_exists = True
+                            break
+                    if not context_already_exists:
+                        remote_ctx = Context(context_policy.name, remote_tenant)
+                        remote_ctx.add_tag(str(tag))
+                        self.policy_queue.append(policy)
+                        return
                 
                 for provided_contract in base_epg_policy.get_provided_contract_policies():
                     contract = Contract(provided_contract.contract_name)
@@ -1362,9 +1652,14 @@ class LocalSite(Site):
 
     def add_policy(self, policy):
         logging.info('')
-        old_policy = self.get_policy_for_epg(policy.tenant,
-                                             policy.app,
-                                             policy.epg)
+        if policy.type == 'epg':
+            old_policy = self.get_policy_for_epg(policy.tenant,
+                                                 policy.app,
+                                                 policy.epg)
+        elif policy.type == 'ctx':
+            old_policy = self.get_policy_for_context(policy.tenant,
+                                                     policy.ctx)
+
         if old_policy is not None:
             self.policy_db.remove(old_policy)
         if policy not in self.policy_db:
@@ -1447,7 +1742,19 @@ class LocalSite(Site):
         :return:
         """
         for policy in self.policy_db:
-            if policy.tenant == tenant_name and policy.app == app_name and policy.epg == epg_name:
+            if policy.type == 'epg' and policy.tenant == tenant_name and policy.app == app_name and policy.epg == epg_name:
+                return policy
+        return None
+
+    def get_policy_for_context(self, tenant_name, ctx_name):
+        """
+        Get the policy for the specific Context
+        :param tenant_name: String containing the tenant name
+        :param ctx_name: String containing the Context name
+        :return:
+        """
+        for policy in self.policy_db:
+            if policy.type == 'ctx' and policy.tenant == tenant_name and policy.ctx == ctx_name:
                 return policy
         return None
 
@@ -1492,10 +1799,13 @@ class RemoteSite(Site):
             return
         tags = resp.json()['imdata']
         for tag in tags:
-            if not IntersiteTag.is_intersite_tag(tag['tagInst']['attributes']['name']):
-                continue
-            itag = IntersiteTag.fromstring(tag['tagInst']['attributes']['name'])
-            export_policy = local_site.get_policy_for_epg(itag.get_tenant_name(), itag.get_app_name(), itag.get_epg_name())
+            if IntersiteTagEpg.is_intersite_tag(tag['tagInst']['attributes']['name']):
+                itag = IntersiteTagEpg.fromstring(tag['tagInst']['attributes']['name'])
+                export_policy = local_site.get_policy_for_epg(itag.get_tenant_name(), itag.get_app_name(), itag.get_epg_name())
+            elif IntersiteTagCtx.is_intersite_tag(tag['tagInst']['attributes']['name']):
+                itag = IntersiteTagCtx.fromstring(tag['tagInst']['attributes']['name'])
+                export_policy = local_site.get_policy_for_context(itag.get_tenant_name(), itag.get_ctx_name())
+
             if '/out-' in tag['tagInst']['attributes']['dn']:
                 l3out_name = tag['tagInst']['attributes']['dn'].split('/out-')[1].split('/')[0]
                 l3instp_name = tag['tagInst']['attributes']['dn'].split('/instP-')[1].split('/')[0]
@@ -2151,6 +2461,7 @@ def execute_tool(args, test_mode=False):
                                     "export": {
                                         "tenant": "",
                                         "app": "",
+                                        "bd": "",
                                         "epg": "",
                                         "remote_epg": "",
                                         "remote_sites": [
@@ -2175,6 +2486,28 @@ def execute_tool(args, test_mode=False):
                                                                 "consumes": [{"contract_name": ""}],
                                                                 "protected_by": [{"taboo_name": ""}],
                                                                 "consumes_interface": [{"cif_name": ""}]
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                },
+                                {
+                                    "export": {
+                                        "tenant": "",
+                                        "ctx": "",
+                                        "remote_ctx": "",
+                                        "remote_sites": [
+                                            {
+                                                "site": {
+                                                    "name": "",
+                                                    "interfaces": [
+                                                        {
+                                                            "ctx": {
+                                                                "name": "",
+                                                                "tenant": "",
                                                             }
                                                         }
                                                     ]

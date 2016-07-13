@@ -7272,8 +7272,9 @@ class LogicalModel(BaseACIObject):
 class SiteAssociated(BaseACIObject):
     """This class defines a container to store remote class id maps"""
 
-    def __init__(self, parent):
+    def __init__(self, parent, localSite):
         super(SiteAssociated, self).__init__(name='SiteAssociated', parent=parent)
+        self._localSite = localSite
 
     def get_json(self):
         children = []
@@ -7282,7 +7283,7 @@ class SiteAssociated(BaseACIObject):
                 rId = entry.get_json()
                 children.append(rId)
 
-        vzSiteAssociated = {'vzSiteAssociated': {'attributes': {}, 'children': children}}
+        vzSiteAssociated = {'vzSiteAssociated': {'attributes': { 'siteId': self._localSite }, 'children': children}}
         return vzSiteAssociated
 
 

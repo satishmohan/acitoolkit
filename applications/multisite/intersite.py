@@ -197,6 +197,85 @@ class IntersiteTagCtx(object):
         return self._remote_site
 
 
+class IntersiteTagBD(object):
+    """
+    This class deals with the tagInst instances stored in the APIC
+    Used to re-derive the application state after booting
+    """
+    def __init__(self, tenant_name, bd_name, remote_site):
+        """
+        Class instance  initialization
+
+        :param tenant_name: String containing the Tenant name. Used to scope the bd.
+        :param bd_name: String containing the bd name.
+        :param remote_site:  String containing the remote site name
+        """
+        self._tenant_name = tenant_name
+        self._bd_name = bd_name
+        self._remote_site = remote_site
+
+    @staticmethod
+    def is_intersite_tag(tag):
+        """
+        Indicates whether the tag is an intersite tag
+
+        :param tag: String containing the tag from the APIC
+        :returns: True or False.  True if the tag is considered a
+                  intersite tag. False otherwise.
+        """
+        return re.match(r'isite-b:.*:.*', tag)
+
+    @classmethod
+    def fromstring(cls, tag):
+        """
+        Extract the intersite tag from a string
+
+        :param tag: String containing the intersite tag
+        :returns: New instance of IntersiteTag
+        """
+        if not cls.is_intersite_tag(tag):
+            assert cls.is_intersite_tag(tag)
+            return None
+        tag_data = tag.split(':')
+        tenant_name = tag_data[1]
+        bd_name = tag_data[2]
+        remote_site_name = tag_data[3]
+        new_tag = cls(tenant_name, bd_name, remote_site_name)
+        return new_tag
+
+    def __str__(self):
+        """
+        Convert the intersite tag into a string
+
+        :returns: String containing the intersite tag
+        """
+        return 'isite-b:' + self._tenant_name + ':' + self._bd_name + ':' + self._remote_site
+
+    def get_tenant_name(self):
+        """
+        Get the tenant name
+
+        :returns: string containing the tenant name
+        """
+        return self._tenant_name
+
+    def get_bd_name(self):
+        """
+        Get the bd name
+
+        :returns: string containing the bd name
+        """
+        return self._bd_name
+
+    def get_remote_site_name(self):
+        """
+        Get the remote site name
+
+        :returns: string containing the remote site name
+        """
+        return self._remote_site
+
+
 class EpgHandler(object):
     """
     Class responsible for tracking Epg Class Id allocations and sending 
@@ -421,6 +500,115 @@ class ContextHandler(object):
         # Add the context JSON if the first context for this tenant's context
         if not context_found:
             tenant_json['fvTenant']['children'].append(new_context)
+            return
+            
+    def push_to_remote_sites(self, collector):
+        """
+        Push the endpoints to the remote sites
+        """
+        logging.debug('')
+        for remote_site in self.db:
+            remote_site_obj = collector.get_site(remote_site)
+            assert remote_site_obj is not None
+            remote_session = remote_site_obj.session
+            for tenant_json in self.db[remote_site]:
+                keep_trying = True
+                while keep_trying:
+                    try:
+                        resp = remote_session.push_to_apic(Tenant.get_url(), tenant_json)
+                    except Timeout:
+                        logging.error('Timeout error when attempting configuration push')
+                        return
+                    keep_trying = False
+                    if not resp.ok:
+                        logging.warning('Could not push to remote site: %s %s', resp, resp.text)
+        self.db = {}
+
+class BridgeDomainHandler(object):
+    """
+    Class responsible for tracking BridgeDomain Class Id allocations and sending 
+    them to remote sites.
+    """
+    def __init__(self, my_monitor):
+        self.db = {}  # Indexed by remote site
+        self._monitor = my_monitor
+    
+    def add_bd(self, bd, local_site):
+        """
+        Add an bd to the temporary database to be pushed to the remote sites
+
+        :param bd: Instance of BridgeDomain
+        :param local_site: Instance of LocalSite
+        """
+        tenant = bd.get_parent()
+        logging.info('bd: %s bd: %s tenant: %s', bd.name, tenant.name)
+
+        # Ignore bds without vnid allocated
+        if bd.class_id == '0':
+            return
+
+        # Get the policy for the bd
+        policy = local_site.get_policy_for_bd(tenant.name, bd.name)
+        if policy is None:
+            logging.info('Ignoring bd as there is no policy defined for its bd (bd: %s tenant: %s)',
+                         bd.name, tenant.name)
+            return
+
+        logging.info('Need to process bd %s', bd.name)
+        # Process the bd policy
+        for remote_site_policy in policy.get_site_policies():
+            for bd_policy in remote_site_policy.get_interfaces():
+                # Create the JSON
+                remote_tenant = Tenant(bd_policy.tenant)
+                remote_bd = BridgeDomain(policy.remote_bd, remote_tenant)
+                remote_site_asc = SiteAssociated(remote_bd, remote_site_policy.name)
+                RemoteId(remote_site_asc, local_site.name, bd.class_id)
+                tenant_json = remote_tenant.get_json()
+
+                # Add to the database
+                self._merge_tenant_json(remote_site_policy.name, tenant_json)
+    
+    def _merge_tenant_json(self, remote_site, new_json):
+        """
+        Merge the JSON for the bd with the rest of the bds
+        already processed
+
+        :param remote_site: String containing the remote site to push the bd
+        :param new_json: JSON dictionary containing the JSON for the bd
+        """
+        # Add the remote site if the first bd for that site
+        if remote_site not in self.db:
+            self.db[remote_site] = [new_json]
+            return
+
+        # Look for the tenant JSON
+        db_json = self.db[remote_site]
+        tenant_found = False
+        for tenant_json in db_json:
+            if tenant_json['fvTenant']['attributes']['name'] == new_json['fvTenant']['attributes']['name']:
+                tenant_found = True
+                break
+
+        # Add the tenant if the first bd for this tenant
+        if not tenant_found:
+            self.db[remote_site].append(new_json)
+            return
+
+        new_bd = new_json['fvTenant']['children'][0]
+        assert 'fvCtx' in new_bd
+
+        # Find the bd in the existing JSON
+        bd_found = False
+        for bd in tenant_json['fvTenant']['children']:
+            if 'fvCtx' not in bd:
+                continue
+            if bd['fvCtx']['attributes']['name'] == new_bd['fvCtx']['attributes']['name']:
+                bd_found = True
+                break
+
+        # Add the bd JSON if the first bd for this tenant's bd
+        if not bd_found:
+            tenant_json['fvTenant']['children'].append(new_bd)
             return
             
     def push_to_remote_sites(self, collector):
@@ -757,6 +945,7 @@ class MultisiteMonitor(threading.Thread):
         self._endpoints = EndpointHandler(self)
         self._epgs = EpgHandler(self)
         self._contexts = ContextHandler(self)
+        self._bds = BridgeDomainHandler(self)
 
     def exit(self):
         """
@@ -866,11 +1055,19 @@ class MultisiteMonitor(threading.Thread):
             self._contexts.add_context(context, self._local_site)
         self._contexts.push_to_remote_sites(self._my_collector)
 
+    def handle_bd_event(self):
+        while BridgeDomain.has_events(self._session):
+            bd = BridgeDomain.get_event(self._session)
+            logging.info('for BridgeDomain: %s', bd.name)
+            self._bds.add_bd(bd, self._local_site)
+        self._bds.push_to_remote_sites(self._my_collector)
+
     def run(self):
         # Subscribe to endpoints, EPGs and so on.
         IPEndpoint.subscribe(self._session)
         EPG.subscribe(self._session)
         Context.subscribe(self._session)
+        BridgeDomain.subscribe(self._session)
 
         while not self._exit:
             if IPEndpoint.has_events(self._session):
@@ -887,7 +1084,12 @@ class MultisiteMonitor(threading.Thread):
                 try:
                     self.handle_context_event()
                 except ConnectionError:
-                    logging.error('Could not handle epg event due to ConnectionError')
+                    logging.error('Could not handle context event due to ConnectionError')
+            if BridgeDomain.has_events(self._session):
+                try:
+                    self.handle_bd_event()
+                except ConnectionError:
+                    logging.error('Could not handle bd event due to ConnectionError')
 
 
 class SiteLoginCredentials(object):
@@ -1279,6 +1481,35 @@ class ContextPolicy(ConfigObject):
                 raise ValueError(self.__class__.__name__ + 'Unknown keyword: %s' % item)
 
         
+class BridgeDomainPolicy(ConfigObject):
+    @property
+    def name(self):
+        return self._policy['bd']['name']
+
+    @property
+    def tenant(self):
+        return self._policy['bd']['tenant']
+
+    def _get_policies(self, cls, keyword):
+        policies = []
+        if keyword not in self._policy['bd']:
+            return policies
+        for policy in self._policy['bd'][keyword]:
+            policies.append(cls(policy))
+        return policies
+
+    def validate(self):
+        if 'bd' not in self._policy:
+            raise ValueError('Expecting "bd" in interface policy')
+        policy = self._policy['bd']
+        for item in policy:
+            keyword_validators = {'name': '_validate_non_empty_string',
+                                  'tenant': '_validate_non_empty_string'
+                                  }
+            if item not in keyword_validators:
+                raise ValueError(self.__class__.__name__ + 'Unknown keyword: %s' % item)
+
+        
 class RemoteSitePolicy(ConfigObject):
     @property
     def name(self):
@@ -1305,6 +1536,8 @@ class RemoteSitePolicy(ConfigObject):
                 interfaces.append(EpgPolicy(interface))
             elif 'ctx' in interface:
                 interfaces.append(ContextPolicy(interface))
+            elif 'bd' in interface:
+                interfaces.append(BridgeDomainPolicy(interface))
         return interfaces
 
     def has_interface_policy(self, interface_policy_name):
@@ -1350,6 +1583,10 @@ class ExportPolicy(ConfigObject):
         return self._policy['export']['remote_ctx']
 
     @property
+    def remote_bd(self):
+        return self._policy['export']['remote_bd']
+
+    @property
     def type(self):
         if 'epg' in self._policy['export']:
             return 'epg'
@@ -1372,6 +1609,7 @@ class ExportPolicy(ConfigObject):
                                   'ctx': '_validate_string',
                                   'remote_epg': '_validate_string',
                                   'remote_ctx': '_validate_string',
+                                  'remote_bd': '_validate_string',
                                   'remote_sites': '_validate_list'}
             if item not in keyword_validators:
                 raise ValueError(self.__class__.__name__ + 'Unknown keyword: %s' % item)
@@ -1578,6 +1816,8 @@ class LocalSite(Site):
             tag = IntersiteTagEpg(policy.tenant, policy.app, policy.epg, self.name)
         elif policy.type == 'ctx':
             tag = IntersiteTagCtx(policy.tenant, policy.ctx, self.name)
+        elif policy.type == 'bd':
+            tag = IntersiteTagBD(policy.tenant, policy.bd, self.name)
         for site_policy in policy.get_site_policies():
             if site_policy.name not in self.policy_tenant_queue:
                 self.policy_tenant_queue[site_policy.name] = []
@@ -1634,6 +1874,19 @@ class LocalSite(Site):
                         remote_ctx.add_tag(str(tag))
                         self.policy_queue.append(policy)
                         return
+                elif isinstance(base_epg_policy, BridgeDomainPolicy):
+                    bd_policy = base_epg_policy
+                    bd_already_exists = False
+                    for existing_bd in remote_tenant.get_children(only_class=BridgeDomain):
+                        if existing_bd.name == bd_policy.name:
+                            remote_ctx = existing_bd
+                            bd_already_exists = True
+                            break
+                    if not bd_already_exists:
+                        remote_ctx = BridgeDomain(bd_policy.name, remote_tenant)
+                        remote_ctx.add_tag(str(tag))
+                        self.policy_queue.append(policy)
+                        return
                 
                 for provided_contract in base_epg_policy.get_provided_contract_policies():
                     contract = Contract(provided_contract.contract_name)
@@ -1659,6 +1912,9 @@ class LocalSite(Site):
         elif policy.type == 'ctx':
             old_policy = self.get_policy_for_context(policy.tenant,
                                                      policy.ctx)
+        elif policy.type == 'bd':
+            old_policy = self.get_policy_for_context(policy.tenant,
+                                                     policy.bd)
 
         if old_policy is not None:
             self.policy_db.remove(old_policy)
@@ -1758,6 +2014,18 @@ class LocalSite(Site):
                 return policy
         return None
 
+    def get_policy_for_bd(self, tenant_name, bd_name):
+        """
+        Get the policy for the specific Bridge Domain
+        :param tenant_name: String containing the tenant name
+        :param bd_name: String containing the Bridge Domain name
+        :return:
+        """
+        for policy in self.policy_db:
+            if policy.type == 'bd' and policy.tenant == tenant_name and policy.bd == bd_name:
+                return policy
+        return None
+
 
 class RemoteSite(Site):
     """
@@ -1805,6 +2073,9 @@ class RemoteSite(Site):
             elif IntersiteTagCtx.is_intersite_tag(tag['tagInst']['attributes']['name']):
                 itag = IntersiteTagCtx.fromstring(tag['tagInst']['attributes']['name'])
                 export_policy = local_site.get_policy_for_context(itag.get_tenant_name(), itag.get_ctx_name())
+            elif IntersiteTagBD.is_intersite_tag(tag['tagInst']['attributes']['name']):
+                itag = IntersiteTagBD.fromstring(tag['tagInst']['attributes']['name'])
+                export_policy = local_site.get_policy_for_bd(itag.get_tenant_name(), itag.get_bd_name())
 
             if '/out-' in tag['tagInst']['attributes']['dn']:
                 l3out_name = tag['tagInst']['attributes']['dn'].split('/out-')[1].split('/')[0]
@@ -2506,6 +2777,28 @@ def execute_tool(args, test_mode=False):
                                                     "interfaces": [
                                                         {
                                                             "ctx": {
+                                                                "name": "",
+                                                                "tenant": "",
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                },
+                                {
+                                    "export": {
+                                        "tenant": "",
+                                        "bd": "",
+                                        "remote_bd": "",
+                                        "remote_sites": [
+                                            {
+                                                "site": {
+                                                    "name": "",
+                                                    "interfaces": [
+                                                        {
+                                                            "bd": {
                                                                 "name": "",
                                                                 "tenant": "",
                                                             }

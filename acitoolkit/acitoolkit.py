@@ -7272,9 +7272,10 @@ class LogicalModel(BaseACIObject):
 class SiteAssociated(BaseACIObject):
     """This class defines a container to store remote class id maps"""
 
-    def __init__(self, parent, localSite):
+    def __init__(self, parent, localSiteName, localSiteId):
         super(SiteAssociated, self).__init__(name='SiteAssociated', parent=parent)
-        self._localSite = localSite
+        self._localSiteName = localSiteName
+        self._localSiteId   = localSiteId
 
     def get_json(self):
         children = []
@@ -7283,24 +7284,28 @@ class SiteAssociated(BaseACIObject):
                 rId = entry.get_json()
                 children.append(rId)
 
-        vzSiteAssociated = {'vzSiteAssociated': {'attributes': { 'siteId': self._localSite }, 'children': children}}
+        vzSiteAssociated = {'vzSiteAssociated': {'attributes': 
+                                                    { 'siteId': self._localSiteId, 'name': self._localSiteName }, 
+                                                 'children': children}}
         return vzSiteAssociated
 
 
 class RemoteId(BaseACIObject):
     """This class defines a container to store remote class id maps"""
 
-    def __init__(self, parent, remoteSite, remoteClassId):
+    def __init__(self, parent, remoteSiteName, remoteSiteId, remoteClassId):
         super(RemoteId, self).__init__(name='RemoteId', parent=parent)
-        self.remoteSite = remoteSite
-        self.remoteClassId = remoteClassId
+        self._remoteSiteName = remoteSiteName
+        self._remoteSiteId = remoteSiteId
+        self._remoteClassId = remoteClassId
 
     def get_json(self):
         vzSiteAssociated = {'vzRemoteId': {
                                             'attributes': 
                                                     {
-                                                    'siteId': self.remoteSite,
-                                                    'remotePcTag': self.remoteClassId
+                                                    'name': self._remoteSiteName,
+                                                    'siteId': self._remoteSiteId,
+                                                    'remotePcTag': self._remoteClassId
                                                     },
                                             'children':[]
                                           }

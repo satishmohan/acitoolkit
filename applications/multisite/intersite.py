@@ -285,7 +285,7 @@ class EpgHandler(object):
         self.db = {}  # Indexed by remote site
         self._monitor = my_monitor
     
-    def add_epg(self, epg, local_site):
+    def add_epg(self, epg, local_site, collector):
         """
         Add an epg to the temporary database to be pushed to the remote sites
 
@@ -325,8 +325,9 @@ class EpgHandler(object):
                 remote_epg = EPG(policy.remote_epg, remote_app)
                 remote_bd  = BridgeDomain(policy.bd, remote_tenant)
                 remote_epg.add_bd(remote_bd)
-                remote_site_asc = SiteAssociated(remote_epg, remote_site_policy.name)
-                RemoteId(remote_site_asc, local_site.name, epg.class_id)
+                remote_site = collector.get_site(remote_site_policy.name)
+                remote_site_asc = SiteAssociated(remote_epg, remote_site_policy.name, remote_site.siteId)
+                RemoteId(remote_site_asc, local_site.name, local_site.siteId, epg.class_id)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database
@@ -424,7 +425,7 @@ class ContextHandler(object):
         self.db = {}  # Indexed by remote site
         self._monitor = my_monitor
     
-    def add_context(self, context, local_site):
+    def add_context(self, context, local_site, collector):
         """
         Add an context to the temporary database to be pushed to the remote sites
 
@@ -452,8 +453,9 @@ class ContextHandler(object):
                 # Create the JSON
                 remote_tenant = Tenant(context_policy.tenant)
                 remote_ctx = Context(policy.remote_ctx, remote_tenant)
-                remote_site_asc = SiteAssociated(remote_ctx, remote_site_policy.name)
-                RemoteId(remote_site_asc, local_site.name, context.class_id)
+                remote_site = collector.get_site(remote_site_policy.name)
+                remote_site_asc = SiteAssociated(remote_ctx, remote_site_policy.name, remote_site.siteId)
+                RemoteId(remote_site_asc, local_site.name, local_site.siteId, context.class_id)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database
@@ -533,7 +535,7 @@ class BridgeDomainHandler(object):
         self.db = {}  # Indexed by remote site
         self._monitor = my_monitor
     
-    def add_bd(self, bd, local_site):
+    def add_bd(self, bd, local_site, collector):
         """
         Add an bd to the temporary database to be pushed to the remote sites
 
@@ -561,8 +563,9 @@ class BridgeDomainHandler(object):
                 # Create the JSON
                 remote_tenant = Tenant(bd_policy.tenant)
                 remote_bd = BridgeDomain(policy.remote_bd, remote_tenant)
-                remote_site_asc = SiteAssociated(remote_bd, remote_site_policy.name)
-                RemoteId(remote_site_asc, local_site.name, bd.class_id)
+                remote_site = collector.get_site(remote_site_policy.name)
+                remote_site_asc = SiteAssociated(remote_bd, remote_site_policy.name, remote_site.siteId)
+                RemoteId(remote_site_asc, local_site.name, local_site.siteId, bd.class_id)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database
@@ -1045,21 +1048,21 @@ class MultisiteMonitor(threading.Thread):
         while EPG.has_events(self._session):
             epg = EPG.get_event(self._session)
             logging.info('for EPG: %s', epg.name)
-            self._epgs.add_epg(epg, self._local_site)
+            self._epgs.add_epg(epg, self._local_site, self._my_collector)
         self._epgs.push_to_remote_sites(self._my_collector)
 
     def handle_context_event(self):
         while Context.has_events(self._session):
             context = Context.get_event(self._session)
             logging.info('for Context: %s', context.name)
-            self._contexts.add_context(context, self._local_site)
+            self._contexts.add_context(context, self._local_site, self._my_collector)
         self._contexts.push_to_remote_sites(self._my_collector)
 
     def handle_bd_event(self):
         while BridgeDomain.has_events(self._session):
             bd = BridgeDomain.get_event(self._session)
             logging.info('for BridgeDomain: %s', bd.name)
-            self._bds.add_bd(bd, self._local_site)
+            self._bds.add_bd(bd, self._local_site, self._my_collector)
         self._bds.push_to_remote_sites(self._my_collector)
 
     def run(self):
@@ -1101,8 +1104,9 @@ class SiteLoginCredentials(object):
 
 
 class Site(object):
-    def __init__(self, name, credentials, local=False):
+    def __init__(self, name, siteId, credentials, local=False):
         self.name = name
+        self.siteId = siteId
         self.local = local
         self.credentials = credentials
         self.session = None
@@ -1259,6 +1263,10 @@ class SitePolicy(ConfigObject):
     def name(self):
         return self._policy['site']['name']
 
+    @property
+    def id(self):
+        return self._policy['site']['id']
+
     @name.setter
     def name(self, name):
         self._policy['site']['name'] = name
@@ -1315,6 +1323,7 @@ class SitePolicy(ConfigObject):
         for item in policy:
             keyword_validators = {'username': '_validate_non_empty_string',
                                   'name': '_validate_non_empty_string',
+                                  'id': '_validate_non_empty_string',
                                   'ip_address': '_validate_ip_address',
                                   'password': '_validate_string',
                                   'local': '_validate_boolean_string',
@@ -1745,8 +1754,8 @@ class ExportPolicy(ConfigObject):
 
 
 class LocalSite(Site):
-    def __init__(self, name, credentials, parent):
-        super(LocalSite, self).__init__(name, credentials, local=True)
+    def __init__(self, name, siteId, credentials, parent):
+        super(LocalSite, self).__init__(name, siteId, credentials, local=True)
         self.my_collector = parent
         self.monitor = None
         self.policy_db = []
@@ -2031,8 +2040,8 @@ class RemoteSite(Site):
     """
     Remote site
     """
-    def __init__(self, name, credentials):
-        super(RemoteSite, self).__init__(name, credentials, local=False)
+    def __init__(self, name, siteId, credentials):
+        super(RemoteSite, self).__init__(name, siteId, credentials, local=False)
         
     def remove_old_l3Instp(self, local_site, tag):
         l3instp_name = tag['tagInst']['attributes']['dn'].split('/instP-')[1].split('/')[0]
@@ -2178,7 +2187,7 @@ class MultisiteCollector(object):
         """
         return len(self.sites)
 
-    def add_site(self, name, credentials, local):
+    def add_site(self, name, siteId, credentials, local):
         """
         Add a site
         :param name: String containing the name of the site
@@ -2189,9 +2198,9 @@ class MultisiteCollector(object):
         logging.info('name:%s local:%s', name, local)
         self.delete_site(name)
         if local:
-            site = LocalSite(name, credentials, self)
+            site = LocalSite(name, siteId, credentials, self)
         else:
-            site = RemoteSite(name, credentials)
+            site = RemoteSite(name, siteId, credentials)
         self.sites.append(site)
         site.start()
         site.session.register_login_callback(self.login_callback)
@@ -2214,7 +2223,7 @@ class MultisiteCollector(object):
             is_local = True
         else:
             is_local = False
-        self.add_site(site.name, creds, is_local)
+        self.add_site(site.name, site.id, creds, is_local)
 
     def delete_site(self, name):
         """

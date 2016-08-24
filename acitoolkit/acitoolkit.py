@@ -7284,10 +7284,10 @@ class SiteAssociated(BaseACIObject):
                 rId = entry.get_json()
                 children.append(rId)
 
-        vzSiteAssociated = {'vzSiteAssociated': {'attributes': 
+        fvSiteAssociated = {'fvSiteAssociated': {'attributes': 
                                                     { 'siteId': self._localSiteId, 'name': self._localSiteName }, 
                                                  'children': children}}
-        return vzSiteAssociated
+        return fvSiteAssociated
 
 
 class RemoteId(BaseACIObject):
@@ -7300,17 +7300,17 @@ class RemoteId(BaseACIObject):
         self._remoteClassId = remoteClassId
 
     def get_json(self):
-        vzSiteAssociated = {'vzRemoteId': {
-                                            'attributes': 
-                                                    {
-                                                    'name': self._remoteSiteName,
-                                                    'siteId': self._remoteSiteId,
-                                                    'remotePcTag': self._remoteClassId
-                                                    },
-                                            'children':[]
-                                          }
-                           }
-        return vzSiteAssociated
+        fvRemoteId =  {'fvRemoteId': {
+                                        'attributes': 
+                                                {
+                                                'name': self._remoteSiteName,
+                                                'siteId': self._remoteSiteId,
+                                                'remotePcTag': self._remoteClassId
+                                                },
+                                        'children':[]
+                                     }
+                      }
+        return fvRemoteId
 
 
 def build_object_dictionary(objs):

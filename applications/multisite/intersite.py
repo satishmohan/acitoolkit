@@ -436,7 +436,7 @@ class ContextHandler(object):
         logging.info('context: %s context: %s tenant: %s', context.name, tenant.name)
 
         # Ignore contexts without vnid allocated
-        if context.class_id == '0':
+        if context.vnid == '0':
             return
 
         # Get the policy for the context
@@ -455,7 +455,7 @@ class ContextHandler(object):
                 remote_ctx = Context(policy.remote_ctx, remote_tenant)
                 remote_site = collector.get_site(remote_site_policy.name)
                 remote_site_asc = SiteAssociated(remote_ctx, remote_site_policy.name, remote_site.siteId)
-                RemoteId(remote_site_asc, local_site.name, local_site.siteId, context.class_id)
+                RemoteId(remote_site_asc, local_site.name, local_site.siteId, context.vnid)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database
@@ -546,7 +546,7 @@ class BridgeDomainHandler(object):
         logging.info('bd: %s bd: %s tenant: %s', bd.name, tenant.name)
 
         # Ignore bds without vnid allocated
-        if bd.class_id == '0':
+        if bd.vnid == '0':
             return
 
         # Get the policy for the bd
@@ -565,7 +565,7 @@ class BridgeDomainHandler(object):
                 remote_bd = BridgeDomain(policy.remote_bd, remote_tenant)
                 remote_site = collector.get_site(remote_site_policy.name)
                 remote_site_asc = SiteAssociated(remote_bd, remote_site_policy.name, remote_site.siteId)
-                RemoteId(remote_site_asc, local_site.name, local_site.siteId, bd.class_id)
+                RemoteId(remote_site_asc, local_site.name, local_site.siteId, bd.vnid)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database

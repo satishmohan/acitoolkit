@@ -1,0 +1,206 @@
+
+{
+    "config": [
+        {
+            "site": {
+                "username": "admin",
+                "name": "Site2",
+                "id"  : "2",
+                "ip_address": "172.23.137.83:8200",
+                "password": "ins3965!",
+                "local": "False",
+                "use_https": "False"
+            }
+        },
+        {
+            "site": {
+                "username": "admin",
+                "name": "Site1",
+                "id": "1",
+                "ip_address": "172.23.137.83:8100",
+                "password": "ins3965!",
+                "local": "False",
+                "use_https": "False"
+            }
+        },
+        {
+            "site": {
+                "username": "admin",
+                "name": "Site3",
+                "id": "3",
+                "ip_address": "172.23.137.83:8300",
+                "password": "ins3965!",
+                "local": "True",
+                "use_https": "False"
+            }
+        },
+        {
+            "export": {
+                "epg": "Prov1",
+                "app": "AP1",
+                "bd": "BD1",
+                "remote_epg": "Prov1",
+                "tenant": "Coke",
+                "remote_sites": [
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Prov1",
+                                        "provides": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Coke",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site2"
+                        }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Prov1",
+                                        "provides": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Coke",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site1"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "export": {
+                "epg": "Cons1",
+                "app": "AP1",
+                "bd": "BD1",
+                "remote_epg": "Cons1",
+                "tenant": "Coke",
+                "remote_sites": [
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Cons1",
+                                        "consumes": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Coke",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site1"
+                        }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Cons1",
+                                        "consumes": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Coke",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site2"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "export": {
+                "ctx": "Ctx1",
+                "remote_ctx": "Ctx1",
+                "tenant": "Coke",
+                "remote_sites": [
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "ctx": {
+                                        "name": "Ctx1",
+                                        "tenant": "Coke"
+                                    }
+                                }
+                            ],
+                            "name": "Site1"
+                        }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "ctx": {
+                                        "name": "Ctx1",
+                                        "tenant": "Coke"
+                                    }
+                                }
+                            ],
+                            "name": "Site2"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "export": {
+                "bd": "BD1",
+                "remote_bd": "BD1",
+                "tenant": "Coke",
+                "remote_sites": [
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "bd": {
+                                        "name": "BD1",
+                                        "tenant": "Coke"
+                                    }
+                                }
+                            ],
+                            "name": "Site1"
+                        }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "bd": {
+                                        "name": "BD1",
+                                        "tenant": "Coke"
+                                    }
+                                }
+                            ],
+                            "name": "Site2"
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+}

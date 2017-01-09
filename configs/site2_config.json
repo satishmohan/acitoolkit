@@ -23,11 +23,23 @@
             }
         },
         {
+            "site": {
+                "username": "admin",
+                "name": "Site3",
+                "id": "3",
+                "ip_address": "172.23.137.83:8300",
+                "password": "ins3965!",
+                "local": "False",
+                "use_https": "False"
+            }
+        },
+
+        {
             "export": {
-                "epg": "Cons1",
+                "epg": "Prov1",
                 "app": "AP1",
                 "bd": "BD1",
-                "remote_epg": "RemoteCons1",
+                "remote_epg": "Prov1",
                 "tenant": "Coke",
                 "remote_sites": [
                     {
@@ -35,7 +47,7 @@
                             "interfaces": [
                                 {
                                     "epg": {
-                                        "name": "RemoteCons1",
+                                        "name": "Prov1",
                                         "provides": [
                                             {
                                                 "contract_name": "K1"
@@ -47,6 +59,74 @@
                                 }
                             ],
                             "name": "Site1"
+                        }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Prov1",
+                                        "provides": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Coke",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site3"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "export": {
+                "epg": "Cons1",
+                "app": "AP1",
+                "bd": "BD1",
+                "remote_epg": "Cons1",
+                "tenant": "Coke",
+                "remote_sites": [
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Cons1",
+                                        "consumes": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Coke",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site1"
+                        }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Cons1",
+                                        "consumes": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Coke",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site3"
                         }
                     }
                 ]
@@ -70,6 +150,19 @@
                             ],
                             "name": "Site1"
                         }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "ctx": {
+                                        "name": "Ctx1",
+                                        "tenant": "Coke"
+                                    }
+                                }
+                            ],
+                            "name": "Site3"
+                        }
                     }
                 ]
             }
@@ -91,6 +184,19 @@
                                 }
                             ],
                             "name": "Site1"
+                        }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "bd": {
+                                        "name": "BD1",
+                                        "tenant": "Coke"
+                                    }
+                                }
+                            ],
+                            "name": "Site3"
                         }
                     }
                 ]

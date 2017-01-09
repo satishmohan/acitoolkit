@@ -36,7 +36,7 @@
                                 {
                                     "epg": {
                                         "name": "RemoteCons1",
-                                        "provides": [
+                                        "consumes": [
                                             {
                                                 "contract_name": "K1"
                                             }

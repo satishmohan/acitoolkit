@@ -2853,11 +2853,11 @@ def execute_tool(args, test_mode=False):
     collector.config_filename = args.config
 
     # Just wait, add any CLI here
-    if test_mode:
-        return collector
-    CommandLine(collector).cmdloop()
-    while True:
-        pass
+#   if test_mode:
+#       return collector
+#   CommandLine(collector).cmdloop()
+#   while True:
+#       pass
 
 
 if __name__ == '__main__':

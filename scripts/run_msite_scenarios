@@ -1,0 +1,12 @@
+#!/bin/bash
+echo "Running Scenario1.1"
+python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario1.1/site1_config.json
+python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario1.1/site2_config.json
+python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario1.1/site3_config.json
+
+echo "Running Scenario1.2"
+python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario1.2/site1_config.json
+python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario1.2/site2_config.json
+python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario1.2/site3_config.json
+
+echo "Done"

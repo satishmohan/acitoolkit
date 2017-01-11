@@ -84,6 +84,55 @@
         },
         {
             "export": {
+                "epg": "Cons1",
+                "app": "AP1",
+                "bd": "BD1",
+                "remote_epg": "Cons1",
+                "tenant": "Pepsi",
+                "remote_sites": [
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Cons1",
+                                        "consumes": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Pepsi",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site2"
+                        }
+                    },
+                    {
+                        "site": {
+                            "interfaces": [
+                                {
+                                    "epg": {
+                                        "name": "Cons1",
+                                        "consumes": [
+                                            {
+                                                "contract_name": "K1"
+                                            }
+                                        ],
+                                        "tenant": "Pepsi",
+                                        "app": "AP1"
+                                    }
+                                }
+                            ],
+                            "name": "Site3"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "export": {
                 "bd": "BD1",
                 "remote_bd": "BD1",
                 "tenant": "Pepsi",

@@ -7,10 +7,10 @@ function runAllScenarios() {
 }
 
 function scenario() {
-    python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario$1/site1_config.json
-    python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario$1/site2_config.json
+    python ../applications/multisite/intersite.py --config ../configs/scenario$1/site1_config.json
+    python ../applications/multisite/intersite.py --config ../configs/scenario$1/site2_config.json
     if [ $numSites -eq 3 ]; then
-        python ../applications/multisite/intersite.py --config ~/Code/acitoolkit/configs/scenario$1/site3_config.json
+        python ../applications/multisite/intersite.py --config ../configs/scenario$1/site3_config.json
     fi
 }
 

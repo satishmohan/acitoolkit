@@ -7293,11 +7293,12 @@ class SiteAssociated(BaseACIObject):
 class RemoteId(BaseACIObject):
     """This class defines a container to store remote class id maps"""
 
-    def __init__(self, parent, remoteSiteName, remoteSiteId, remoteClassId):
+    def __init__(self, parent, remoteSiteName, remoteSiteId, remoteClassId, status='created,modified'):
         super(RemoteId, self).__init__(name='RemoteId', parent=parent)
         self._remoteSiteName = remoteSiteName
         self._remoteSiteId = remoteSiteId
         self._remoteClassId = remoteClassId
+        self._status = status
 
     def get_json(self):
         fvRemoteId =  {'fvRemoteId': {
@@ -7305,7 +7306,8 @@ class RemoteId(BaseACIObject):
                                                 {
                                                 'name': self._remoteSiteName,
                                                 'siteId': self._remoteSiteId,
-                                                'remotePcTag': self._remoteClassId
+                                                'remotePcTag': self._remoteClassId,
+                                                'status': self._status
                                                 },
                                         'children':[]
                                      }

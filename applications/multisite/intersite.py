@@ -28,6 +28,7 @@ import argparse
 # Maximum number of endpoints to handle in a single burst
 MAX_ENDPOINTS = 500
 
+deleteMappings = False
 
 class IntersiteTagEpg(object):
     """
@@ -327,7 +328,10 @@ class EpgHandler(object):
                 remote_epg.add_bd(remote_bd)
                 remote_site = collector.get_site(remote_site_policy.name)
                 remote_site_asc = SiteAssociated(remote_epg, remote_site_policy.name, remote_site.siteId)
-                RemoteId(remote_site_asc, local_site.name, local_site.siteId, epg.class_id)
+                if deleteMappings:
+                    RemoteId(remote_site_asc, local_site.name, local_site.siteId, epg.class_id, status='deleted')
+                else:
+                    RemoteId(remote_site_asc, local_site.name, local_site.siteId, epg.class_id)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database
@@ -455,7 +459,10 @@ class ContextHandler(object):
                 remote_ctx = Context(policy.remote_ctx, remote_tenant)
                 remote_site = collector.get_site(remote_site_policy.name)
                 remote_site_asc = SiteAssociated(remote_ctx, remote_site_policy.name, remote_site.siteId)
-                RemoteId(remote_site_asc, local_site.name, local_site.siteId, context.vnid)
+                if deleteMappings:
+                    RemoteId(remote_site_asc, local_site.name, local_site.siteId, context.vnid, status='deleted')
+                else:
+                    RemoteId(remote_site_asc, local_site.name, local_site.siteId, context.vnid)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database
@@ -565,7 +572,10 @@ class BridgeDomainHandler(object):
                 remote_bd = BridgeDomain(policy.remote_bd, remote_tenant)
                 remote_site = collector.get_site(remote_site_policy.name)
                 remote_site_asc = SiteAssociated(remote_bd, remote_site_policy.name, remote_site.siteId)
-                RemoteId(remote_site_asc, local_site.name, local_site.siteId, bd.vnid)
+                if deleteMappings:
+                    RemoteId(remote_site_asc, local_site.name, local_site.siteId, bd.vnid, status='deleted')
+                else:
+                    RemoteId(remote_site_asc, local_site.name, local_site.siteId, bd.vnid)
                 tenant_json = remote_tenant.get_json()
 
                 # Add to the database
@@ -1922,8 +1932,8 @@ class LocalSite(Site):
             old_policy = self.get_policy_for_context(policy.tenant,
                                                      policy.ctx)
         elif policy.type == 'bd':
-            old_policy = self.get_policy_for_context(policy.tenant,
-                                                     policy.bd)
+            old_policy = self.get_policy_for_bd(policy.tenant,
+                                                policy.bd)
 
         if old_policy is not None:
             self.policy_db.remove(old_policy)
@@ -2687,6 +2697,7 @@ def get_arg_parser():
                         choices=['verbose', 'warnings', 'critical'],
                         const='critical',
                         help='Enable debug messages.')
+    parser.add_argument('--delete', help='Delete inter-site mappings')
     return parser
 
 
@@ -2718,6 +2729,9 @@ def execute_tool(args, test_mode=False):
             level = logging.CRITICAL
     else:
         level = logging.CRITICAL
+    if args.delete is "1":
+        global deleteMappings
+        deleteMappings = True
     log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(funcName)s(%(lineno)d) %(message)s')
     log_file = 'intersite.%s.log' % str(os.getpid())
     my_handler = RotatingFileHandler(log_file, mode='a', maxBytes=5*1024*1024,

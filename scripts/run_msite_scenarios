@@ -1,48 +1,57 @@
 #!/bin/bash
 
 function runAllScenarios() {
-    scenario1.1 $1
-    scenario1.2 $1
+    scenario1.1 $@
+    scenario1.2 $@
     echo "Done"
 }
 
 function scenario() {
-    python ../applications/multisite/intersite.py --config ../configs/scenario$1/site1_config.json
-    python ../applications/multisite/intersite.py --config ../configs/scenario$1/site2_config.json
-    if [ $numSites -eq 3 ]; then
-        python ../applications/multisite/intersite.py --config ../configs/scenario$1/site3_config.json
+    deleteMappings='--delete 0'
+    if [ $3 -eq 1 ]; then
+        deleteMappings='--delete 1'
+    fi
+    python ../applications/multisite/intersite.py --config ../configs/scenario$1/site1_config.json $deleteMappings
+    python ../applications/multisite/intersite.py --config ../configs/scenario$1/site2_config.json $deleteMappings
+    if [ $2 -eq 3 ]; then
+        python ../applications/multisite/intersite.py --config ../configs/scenario$1/site3_config.json $deleteMappings
     fi
 }
 
 function scenario1.1() {
     echo "Running Scenario1.1"
-    scenario 1.1 numSites
+    scenario 1.1 $@
 }
 
 function scenario1.2() {
     echo "Running Scenario1.2"
-    scenario 1.2 numSites
+    scenario 1.2 $@
 }
 
 
 # setup defaults
 numSites=2
+deleteMappings=0
 
 if [ $# -gt 0 ]; then
-    while getopts "n:" arg; do
+    while getopts "n:d" arg; do
       case $arg in
         n)
             numSites=$OPTARG
+            ;;
+        d)
+            deleteMappings=1
             ;;
         *)
             echo "Invalid option specified"
             echo "Usage: run_msite_scenarions [-n]"
             echo "      -n: number of sites (default is 2)"
+            echo "      -d: delete intersite mappings"
             exit 1
             ;;
       esac
     done
-    runAllScenarios
+    runAllScenarios $numSites $deleteMappings
 else
     runAllScenarios
 fi

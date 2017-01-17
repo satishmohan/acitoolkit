@@ -2565,6 +2565,22 @@ class BridgeDomain(BaseACIObject):
         """
         return dn.split('/BD-')[1].split('/')[0]
 
+    @staticmethod
+    def _get_children_classes():
+        """
+        Get the acitoolkit class of the children of this object.
+        This is meant to be overridden by any inheriting classes that have children.
+        If they don't have children, this will return an empty list.
+        :return: list of classes
+        """
+        return [Subnet]
+
+    def populate_children(self, session, deep=False, include_concrete=False):
+        for child_class in self._get_children_classes():
+            child_class.get(session, self, self.get_parent())
+
+        return self._children
+
     def set_unknown_mac_unicast(self, unicast):
         """
         Set the unknown mac unicast for this BD

@@ -556,6 +556,8 @@ class BridgeDomainHandler(object):
         if bd.vnid == '0':
             return
 
+        bd.populate_children(local_site.session)
+
         # Get the policy for the bd
         policy = local_site.get_policy_for_bd(tenant.name, bd.name)
         if policy is None:
@@ -570,6 +572,20 @@ class BridgeDomainHandler(object):
                 # Create the JSON
                 remote_tenant = Tenant(bd_policy.tenant)
                 remote_bd = BridgeDomain(policy.remote_bd, remote_tenant)
+
+                # Since we are stretching the BD, collect all the local BD subnets and add them to the
+                # remote BD
+                if not deleteMappings:
+                    bd_subnets = bd.get_subnets()
+                    for subnet in bd_subnets:
+#                       print 'Site %s: Adding local subnet to remote site %s, tenant %s, BD %s - %s' % (local_site.name,
+#                                                                                                        remote_site_policy.name,
+#                                                                                                        remote_tenant.name,
+#                                                                                                        remote_bd.name,
+#                                                                                                        subnet.ip)
+                        remote_bd.add_subnet(subnet)
+#                   print ''
+
                 remote_site = collector.get_site(remote_site_policy.name)
                 remote_site_asc = SiteAssociated(remote_bd, remote_site_policy.name, remote_site.siteId)
                 if deleteMappings:
